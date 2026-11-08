@@ -98,6 +98,14 @@ internal class SkiaBackedCanvas : Canvas {
     // instance on each draw call
     @PublishedApi
     internal var internalSkiaCanvas: SkCanvas = EmptyCanvas
+        get() {
+            // Every draw goes through here: the target's pixels may change.
+            drawTarget?.invalidateImage()
+            return field
+        }
+
+    /** The ImageBitmap this canvas draws into (Canvas(ImageBitmap)), whose cached Image a draw makes stale. */
+    internal var drawTarget: SkiaBackedImageBitmap? = null
     override fun save() {
         internalSkiaCanvas.save()
     }
@@ -292,24 +300,43 @@ internal class SkiaBackedCanvas : Canvas {
         dstBottom: Float,
         paint: Paint
     ) {
-        val bitmap = image.asSkiaBitmap()
-
-        Image.makeFromBitmap(bitmap).use { skiaImage ->
-            internalSkiaCanvas.drawImageRect(
-                image = skiaImage,
-                srcLeft = srcLeft,
-                srcTop = srcTop,
-                srcRight = srcRight,
-                srcBottom = srcBottom,
-                dstLeft = dstLeft,
-                dstTop = dstTop,
-                dstRight = dstRight,
-                dstBottom = dstBottom,
-                samplingMode = paint.filterQuality.toSkia(),
-                paint = paint.skiaPaint,
-                strict = true,
-            )
+        val skiaBacked = image.requireSkiaBacked()
+        val cached = skiaBacked.cachedImageOrNull()
+        if (cached != null) {
+            drawSkiaImageRect(cached, srcLeft, srcTop, srcRight, srcBottom, dstLeft, dstTop, dstRight, dstBottom, paint)
+        } else {
+            Image.makeFromBitmap(skiaBacked.bitmap).use { skiaImage ->
+                drawSkiaImageRect(skiaImage, srcLeft, srcTop, srcRight, srcBottom, dstLeft, dstTop, dstRight, dstBottom, paint)
+            }
         }
+    }
+
+    private fun drawSkiaImageRect(
+        skiaImage: Image,
+        srcLeft: Float,
+        srcTop: Float,
+        srcRight: Float,
+        srcBottom: Float,
+        dstLeft: Float,
+        dstTop: Float,
+        dstRight: Float,
+        dstBottom: Float,
+        paint: Paint
+    ) {
+        internalSkiaCanvas.drawImageRect(
+            image = skiaImage,
+            srcLeft = srcLeft,
+            srcTop = srcTop,
+            srcRight = srcRight,
+            srcBottom = srcBottom,
+            dstLeft = dstLeft,
+            dstTop = dstTop,
+            dstRight = dstRight,
+            dstBottom = dstBottom,
+            samplingMode = paint.filterQuality.toSkia(),
+            paint = paint.skiaPaint,
+            strict = true,
+        )
     }
 
     override fun drawPoints(pointMode: PointMode, points: List<Offset>, paint: Paint) {

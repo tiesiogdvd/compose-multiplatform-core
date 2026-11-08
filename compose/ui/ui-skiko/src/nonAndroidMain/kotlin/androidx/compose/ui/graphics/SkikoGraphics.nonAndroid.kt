@@ -51,11 +51,14 @@ import org.jetbrains.skia.Shader as SkShader
 @OptIn(InternalComposeUiApi::class)
 internal object SkikoGraphics : PlatformGraphics {
     override fun createCanvas(image: ImageBitmap): Canvas {
-        val skiaBitmap = image.asSkiaBitmap()
-        require(!skiaBitmap.isImmutable) {
+        val target = image.requireSkiaBacked()
+        require(!target.bitmap.isImmutable) {
             "Cannot draw on immutable ImageBitmap"
         }
-        return SkCanvas(skiaBitmap).asComposeCanvas()
+        return SkiaBackedCanvas().apply {
+            internalSkiaCanvas = SkCanvas(target.bitmap)
+            drawTarget = target
+        }
     }
 
     override fun createPaint(): Paint = SkPaint().asComposePaint()
@@ -154,7 +157,7 @@ internal object SkikoGraphics : PlatformGraphics {
         tileModeX: TileMode,
         tileModeY: TileMode,
     ): androidx.compose.ui.graphics.Shader =
-        image.asSkiaBitmap()
+        image.requireSkiaBacked().bitmap
             .makeShader(tileModeX.toSkiaTileMode(), tileModeY.toSkiaTileMode())
             .asComposeShader()
 

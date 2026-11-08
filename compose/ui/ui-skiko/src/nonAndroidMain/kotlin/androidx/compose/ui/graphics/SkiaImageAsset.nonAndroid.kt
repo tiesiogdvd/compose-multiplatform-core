@@ -35,12 +35,12 @@ import org.jetbrains.skia.ImageInfo
  * not create a copy of the original [Bitmap] and changes to it
  * will modify the returned [ImageBitmap]
  */
-fun Bitmap.asComposeImageBitmap(): ImageBitmap = SkiaBackedImageBitmap(this)
+fun Bitmap.asComposeImageBitmap(): ImageBitmap = SkiaBackedImageBitmap(this, pixelsOwned = false)
 
 /**
  * Create an [ImageBitmap] from the given [Image].
  */
-fun Image.toComposeImageBitmap(): ImageBitmap = SkiaBackedImageBitmap(toBitmap())
+fun Image.toComposeImageBitmap(): ImageBitmap = SkiaBackedImageBitmap(toBitmap(), pixelsOwned = true)
 
 // Split into expect/actual to use a faster implementation for web
 // See web implementation for details and the reason.
@@ -52,19 +52,57 @@ internal expect fun Image.toBitmap(): Bitmap
  * @Throws UnsupportedOperationException if this [ImageBitmap] is not backed by an
  * org.jetbrains.skia.Image
  */
-fun ImageBitmap.asSkiaBitmap(): Bitmap =
-    when (this) {
-        is SkiaBackedImageBitmap -> bitmap
-        else -> throw UnsupportedOperationException("Unable to obtain org.jetbrains.skia.Image")
-    }
+fun ImageBitmap.asSkiaBitmap(): Bitmap {
+    val image = requireSkiaBacked()
+    // The caller may change the pixels behind Compose's back from now on.
+    image.disownPixels()
+    return image.bitmap
+}
 
-private class SkiaBackedImageBitmap(val bitmap: Bitmap) : ImageBitmap {
+/** The [SkiaBackedImageBitmap] behind this [ImageBitmap], for Compose's own use (it does not disown the pixels). */
+internal fun ImageBitmap.requireSkiaBacked(): SkiaBackedImageBitmap =
+    this as? SkiaBackedImageBitmap
+        ?: throw UnsupportedOperationException("Unable to obtain org.jetbrains.skia.Image")
+
+/**
+ * @param pixelsOwned whether the pixels change only through Compose: drawing through a Canvas(ImageBitmap) of it
+ * (SkikoGraphics.createCanvas), which [invalidateImage]s it. A Bitmap the caller wraps ([asComposeImageBitmap]) or
+ * takes out ([asSkiaBitmap]) can change without Compose knowing, so its draws snapshot it every time.
+ */
+internal class SkiaBackedImageBitmap(val bitmap: Bitmap, private var pixelsOwned: Boolean) : ImageBitmap {
     override val colorSpace = bitmap.colorSpace.toComposeColorSpace()
     override val config = bitmap.colorType.toComposeConfig()
     override val hasAlpha = !bitmap.isOpaque
     override val height get() = bitmap.height
     override val width get() = bitmap.width
-    override fun prepareToDraw() = Unit
+
+    /**
+     * The Image draws use while the pixels are unchanged. Image.makeFromBitmap copies a mutable bitmap and gives the copy
+     * a new id, so a snapshot per draw is a new texture per draw on the GPU (a copy and an upload per icon per frame:
+     * VectorPainter draws through a DrawCache bitmap); one Image per content keeps the GPU's cached texture.
+     */
+    private var cachedImage: Image? = null
+
+    // DrawCache calls this after drawing new content into the bitmap.
+    override fun prepareToDraw() = invalidateImage()
+
+    /** The pixels may have changed: the next draw takes a new snapshot. */
+    fun invalidateImage() {
+        val image = cachedImage ?: return
+        cachedImage = null
+        image.close()
+    }
+
+    fun disownPixels() {
+        pixelsOwned = false
+        invalidateImage()
+    }
+
+    /** The Image to draw, kept until the pixels change; null when they are not [pixelsOwned] (snapshot every draw). */
+    fun cachedImageOrNull(): Image? {
+        if (!pixelsOwned) return null
+        return cachedImage ?: Image.makeFromBitmap(bitmap).also { cachedImage = it }
+    }
 
     override fun readPixels(
         buffer: IntArray,
