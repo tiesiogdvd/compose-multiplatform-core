@@ -41,6 +41,7 @@ import androidx.compose.ui.text.style.TextAlign
 import androidx.compose.ui.text.style.TextDecoration
 import androidx.compose.ui.text.style.TextOverflow
 import androidx.compose.ui.unit.Constraints
+import androidx.compose.ui.unit.isSpecified
 import androidx.compose.ui.unit.isUnspecified
 import kotlin.math.floor
 import org.jetbrains.skia.FontMetrics
@@ -347,11 +348,16 @@ internal class SkikoParagraph(
                 .ifEmpty { layouter.emptyLineMetrics(paragraph) }
         }
 
-        val fontMetrics = defaultFont.metrics
-        lineMetrics[0] = lineMetrics[0]
-            .trimFirstAscent(fontMetrics, layouter.textStyle)
-        lineMetrics[lineMetrics.size - 1] = lineMetrics[lineMetrics.size - 1]
-            .trimLastDescent(fontMetrics, layouter.textStyle)
+        // The trims only apply with a line height: without one, the default font (resolved and
+        // created on first use) and its metrics are not needed, and every text layout's first
+        // baseline (TextStringSimpleNode reads it on each measure that changed the layout) took them.
+        val textStyle = layouter.textStyle
+        if (textStyle.lineHeight.isSpecified) {
+            val fontMetrics = defaultFont.metrics
+            lineMetrics[0] = lineMetrics[0].trimFirstAscent(fontMetrics, textStyle)
+            lineMetrics[lineMetrics.size - 1] = lineMetrics[lineMetrics.size - 1]
+                .trimLastDescent(fontMetrics, textStyle)
+        }
 
         return lineMetrics
     }
