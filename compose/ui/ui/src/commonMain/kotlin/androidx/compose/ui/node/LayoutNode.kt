@@ -436,13 +436,23 @@ internal class LayoutNode(
             // applying the modifier, we will notify listeners of semantics changes.
             isSemanticsInvalidated = true
         } else {
+            val owner = requireOwner()
+            if (owner.semanticsOwner.listeners.isEmpty()) {
+                // Flow: nobody diffs configurations (no SemanticsListener; only Android registers one), so the
+                // configuration is calculated on its first read (accessibility, tests, semantics hit testing)
+                // instead of on every modifier update.
+                isSemanticsConfigurationStale = true
+                isSemanticsInvalidated = false
+                owner.onSemanticsChange()
+                return
+            }
             // We are not currently updating the modifier, so instead of scheduling invalidation,
             // we update the semantics configuration and send the notification event right away.
             val prev = _semanticsConfiguration
             _semanticsConfiguration = calculateSemanticsConfiguration()
+            isSemanticsConfigurationStale = false
             isSemanticsInvalidated = false
 
-            val owner = requireOwner()
             owner.semanticsOwner.notifySemanticsChange(this, prev)
 
             // This is needed for Accessibility and ContentCapture. Remove after these systems
@@ -460,8 +470,15 @@ internal class LayoutNode(
             // whether or not deactivated nodes should be considered removed or not.
             if (!isAttached || isDeactivated || !nodes.has(Nodes.Semantics)) return null
 
+            if (isSemanticsConfigurationStale && !isCurrentlyCalculatingSemanticsConfiguration) {
+                isSemanticsConfigurationStale = false
+                _semanticsConfiguration = calculateSemanticsConfiguration()
+            }
             return _semanticsConfiguration
         }
+
+    // Flow: the configuration is out of date and is calculated on its next read (see invalidateSemantics).
+    private var isSemanticsConfigurationStale = false
 
     private var isCurrentlyCalculatingSemanticsConfiguration = false
 
@@ -599,6 +616,7 @@ internal class LayoutNode(
         if (nodes.has(Nodes.Semantics)) {
             val prev = _semanticsConfiguration
             _semanticsConfiguration = null
+            isSemanticsConfigurationStale = false
             isSemanticsInvalidated = false
             owner.semanticsOwner.notifySemanticsChange(this, prev)
 
@@ -1491,6 +1509,7 @@ internal class LayoutNode(
         // if the node is detached the semantics were already updated without this node.
         if (isAttached) {
             _semanticsConfiguration = null
+            isSemanticsConfigurationStale = false
             isSemanticsInvalidated = false
         }
         owner?.onLayoutNodeDeactivated(this)
