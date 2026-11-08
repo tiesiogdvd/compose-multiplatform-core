@@ -21,6 +21,8 @@ import androidx.compose.ui.geometry.Rect
 import androidx.compose.ui.text.SkikoComposeTestBase
 import kotlin.test.Test
 import kotlin.test.assertEquals
+import kotlin.test.assertNotNull
+import kotlin.test.assertNull
 import kotlin.test.assertSame
 import org.jetbrains.skia.Canvas as SkCanvas
 
@@ -45,7 +47,7 @@ class SkiaImageBitmapCacheTest : SkikoComposeTestBase() {
         source.fill(Canvas(source), Color.Red)
         val skiaBacked = source.requireSkiaBacked()
         assertEquals(Color.Red, drawnColor(source))
-        val first = skiaBacked.cachedImageOrNull()
+        val first = assertNotNull(skiaBacked.cachedImageOrNull(), "ImageBitmap(w, h) is cached")
         assertEquals(Color.Red, drawnColor(source))
         assertSame(first, skiaBacked.cachedImageOrNull())
     }
@@ -78,6 +80,7 @@ class SkiaImageBitmapCacheTest : SkikoComposeTestBase() {
         source.fill(Canvas(source), Color.Red)
         assertEquals(Color.Red, drawnColor(source))
         val bitmap = source.asSkiaBitmap()
+        assertNull(source.requireSkiaBacked().cachedImageOrNull())
         SkCanvas(bitmap).clear(Color.Blue.toArgb())
         assertEquals(Color.Blue, drawnColor(source))
         SkCanvas(bitmap).clear(Color.Green.toArgb())
@@ -85,9 +88,18 @@ class SkiaImageBitmapCacheTest : SkikoComposeTestBase() {
     }
 
     @Test
+    fun aDecodedImageIsCached() {
+        val image = ImageBitmap(4, 4).also { it.fill(Canvas(it), Color.Red) }
+        val decoded = org.jetbrains.skia.Image.makeFromBitmap(image.requireSkiaBacked().bitmap).toComposeImageBitmap()
+        assertNotNull(decoded.requireSkiaBacked().cachedImageOrNull())
+        assertEquals(Color.Red, drawnColor(decoded))
+    }
+
+    @Test
     fun aWrappedBitmapIsSnapshotOnEveryDraw() {
         val bitmap = org.jetbrains.skia.Bitmap().apply { allocN32Pixels(4, 4) }
         val source = bitmap.asComposeImageBitmap()
+        assertNull(source.requireSkiaBacked().cachedImageOrNull())
         SkCanvas(bitmap).clear(Color.Red.toArgb())
         assertEquals(Color.Red, drawnColor(source))
         SkCanvas(bitmap).clear(Color.Blue.toArgb())

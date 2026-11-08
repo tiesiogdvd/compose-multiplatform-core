@@ -94,7 +94,8 @@ internal object SkikoGraphics : PlatformGraphics {
         )
         val bitmap = Bitmap()
         bitmap.allocPixels(ImageInfo(colorInfo, width, height))
-        return bitmap.asComposeImageBitmap()
+        // Nobody else holds the Bitmap: its pixels change only through Compose (asComposeImageBitmap's would not).
+        return SkiaBackedImageBitmap(bitmap, pixelsOwned = true)
     }
 
     override fun decodeImageBitmap(bytes: ByteArray): ImageBitmap =
