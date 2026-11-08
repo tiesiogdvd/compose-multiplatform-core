@@ -43,6 +43,8 @@ import androidx.compose.ui.geometry.Rect
 import androidx.compose.ui.graphics.Canvas
 import androidx.compose.ui.graphics.Matrix
 import androidx.compose.ui.graphics.SkiaGraphicsContext
+import androidx.compose.ui.graphics.asComposeCanvas
+import androidx.compose.ui.graphics.skiaCanvas
 import androidx.compose.ui.graphics.layer.GraphicsLayer
 import androidx.compose.ui.input.InputMode
 import androidx.compose.ui.input.key.Key
@@ -114,6 +116,7 @@ import kotlinx.coroutines.cancel
 import kotlinx.coroutines.coroutineScope
 import kotlinx.coroutines.launch
 import kotlinx.coroutines.suspendCancellableCoroutine
+import org.jetbrains.skiko.node.RenderNode
 
 /**
  * Owner of root [LayoutNode].
@@ -204,6 +207,7 @@ internal class RootNodeOwner(
         coroutineScope.cancel()
         platformContext.rootForTestListener?.onRootForTestDisposed(rootForTest)
         snapshotObserver.stopObserving()
+        ownedLayerManager.onRecordsRootDrawingChanged(false)
         graphicsContext.close()
         _owner.dispose()
         // we don't need to call root.detach() because root will be garbage collected
@@ -308,6 +312,33 @@ internal class RootNodeOwner(
         updatePositionCacheAndDispatch()
     }
 
+    /**
+     * Whether the root's own drawing (what its layout nodes draw without a layer of their own) is
+     * recorded into a render node of the owner, drawn by [draw] and recorded anew only where it is
+     * invalidated, as Android's root view keeps its display list: then the whole drawing is render
+     * nodes ([prepareDraw]), which a host can track the damage of.
+     */
+    var recordsRootDrawing: Boolean = false
+        set(value) {
+            if (field == value) return
+            field = value
+            ownedLayerManager.onRecordsRootDrawingChanged(value)
+        }
+
+    /**
+     * Brings every render node the next [draw] draws up to date (re-records the dirty layers and,
+     * where it was invalidated, the root's drawing) and returns the root render node, which [draw]
+     * then draws as is; null without [recordsRootDrawing].
+     */
+    fun prepareDraw(): RenderNode? {
+        require(!isDisposed) { "RootNodeOwner is already disposed" }
+        if (!recordsRootDrawing) return null
+        return trace("RootNodeOwner:prepareDraw") {
+            hasPendingDraw = false
+            ownedLayerManager.prepare()
+        }
+    }
+
     fun draw(canvas: Canvas) {
         require(!isDisposed) { "RootNodeOwner is already disposed" }
         trace("RootNodeOwner:draw") {
@@ -333,6 +364,7 @@ internal class RootNodeOwner(
     }
 
     private fun onRootSizeChanged(size: IntSize?) {
+        ownedLayerManager.invalidateRootDrawing()
         measureAndLayoutDelegate.updateRootConstraints(size.toMaxConstraints())
         if (measureAndLayoutDelegate.hasPendingMeasureOrLayout) {
             requestMeasureAndLayout()
@@ -605,6 +637,7 @@ internal class RootNodeOwner(
                     val resend = if (sendPointerUpdate) onPointerUpdateCallback else null
                     val rootNodeResized = measureAndLayoutDelegate.measureAndLayout(resend)
                     if (rootNodeResized) {
+                        ownedLayerManager.invalidateRootDrawing()
                         requestDraw()
                     }
                     measureAndLayoutDelegate.dispatchOnPositionedCallbacks()
@@ -781,6 +814,7 @@ internal class RootNodeOwner(
         }
 
         override fun invalidateRootLayer() {
+            ownedLayerManager.invalidateRootDrawing()
             ownedLayerManager.invalidate()
         }
 
@@ -958,9 +992,25 @@ internal class RootNodeOwner(
 
         override fun voteFrameRate(frameRate: Float) = frameRateVoteCollector.collectVote(frameRate)
 
-        fun draw(canvas: Canvas) {
-            isDrawingContent = true
+        // The root's drawing as a render node (recordsRootDrawing), and whether it has to be recorded anew.
+        private var rootNode: RenderNode? = null
+        private var rootDrawingDirty = true
+        private var prepared = false
 
+        fun invalidateRootDrawing() {
+            rootDrawingDirty = true
+        }
+
+        fun onRecordsRootDrawingChanged(enabled: Boolean) {
+            if (!enabled) {
+                rootNode?.close()
+                rootNode = null
+            }
+            rootDrawingDirty = true
+            prepared = false
+        }
+
+        private fun updateDisplayLists() {
             // Unlike Android, "draw" forms actual render commands sequence, so updating
             // display lists after that won't affect current frame result.
             // So, we applying it before drawing to reflect the changes from previous phases.
@@ -971,13 +1021,9 @@ internal class RootNodeOwner(
                 }
                 dirtyLayers.clear()
             }
+        }
 
-            // Draw root node
-            owner.root.draw(
-                canvas = canvas,
-                graphicsLayer = null // the root node will provide the root graphics layer
-            )
-
+        private fun finishDrawingContent() {
             // updateDisplayList operations performed above (during root.draw and during the explicit
             // layer.updateDisplayList() calls) can result in the same layers being invalidated. These
             // layers have been added to postponedDirtyLayers and will be redrawn during the next
@@ -991,6 +1037,55 @@ internal class RootNodeOwner(
             frameRateVoteCollector.submitVoteIfNeeded()
 
             isDrawingContent = false
+        }
+
+        /** Records what the next [draw] draws (see [RootNodeOwner.prepareDraw]); recordsRootDrawing only. */
+        fun prepare(): RenderNode {
+            val node = rootNode ?: RenderNode(graphicsContext.renderNodeContext).also {
+                rootNode = it
+                rootDrawingDirty = true
+            }
+            if (prepared) return node
+            isDrawingContent = true
+            updateDisplayLists()
+            // The root draws whatever its layout nodes draw without a layer of their own, which
+            // only changes where Compose invalidates the root (as on Android, where the root
+            // view's display list is kept until then). The layers it draws are nodes of their own.
+            if (rootDrawingDirty || owner.showLayoutBounds) {
+                rootDrawingDirty = false
+                val recordingCanvas = node.beginRecording()
+                try {
+                    owner.root.draw(
+                        canvas = recordingCanvas.asComposeCanvas(),
+                        graphicsLayer = null // the root node will provide the root graphics layer
+                    )
+                } finally {
+                    node.endRecording()
+                }
+            }
+            finishDrawingContent()
+            prepared = true
+            return node
+        }
+
+        fun draw(canvas: Canvas) {
+            if (recordsRootDrawing) {
+                val node = prepare()
+                prepared = false
+                node.drawInto(canvas.skiaCanvas)
+                return
+            }
+            isDrawingContent = true
+
+            updateDisplayLists()
+
+            // Draw root node
+            owner.root.draw(
+                canvas = canvas,
+                graphicsLayer = null // the root node will provide the root graphics layer
+            )
+
+            finishDrawingContent()
         }
     }
 }

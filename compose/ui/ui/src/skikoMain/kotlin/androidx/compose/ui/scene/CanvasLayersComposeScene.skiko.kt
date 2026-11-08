@@ -53,6 +53,7 @@ import androidx.compose.ui.util.fastForEachReversed
 import androidx.compose.ui.util.fastLastOrNull
 import androidx.compose.ui.viewinterop.InteropView
 import androidx.compose.ui.window.getDialogScrimBlendMode
+import org.jetbrains.skiko.node.RenderNode
 import kotlin.coroutines.CoroutineContext
 import kotlin.math.max
 
@@ -303,6 +304,20 @@ private class CanvasLayersComposeSceneImpl(
         forEachOwner { it.draw(canvas) }
     }
 
+    override fun onRecordsRootDrawingChanged(enabled: Boolean) {
+        forEachOwner { it.recordsRootDrawing = enabled }
+    }
+
+    override fun doPrepareDraw(): List<RenderNode>? {
+        val nodes = ArrayList<RenderNode>(layers.size + 1)
+        var complete = true
+        forEachOwner { owner ->
+            val node = owner.prepareDraw()
+            if (node != null) nodes += node else complete = false
+        }
+        return if (complete) nodes else null
+    }
+
     override var showLayoutBounds: Boolean = false
         set(value) {
             field = value
@@ -494,6 +509,7 @@ private class CanvasLayersComposeSceneImpl(
     )
 
     private fun onOwnerAppended(owner: RootNodeOwner) {
+        owner.recordsRootDrawing = recordsRootDrawing
         semanticsOwnerListener?.onSemanticsOwnerAppended(owner.semanticsOwner)
     }
 

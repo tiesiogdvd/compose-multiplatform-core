@@ -49,6 +49,7 @@ import androidx.compose.ui.unit.IntSize
 import androidx.compose.ui.unit.LayoutDirection
 import androidx.compose.ui.viewinterop.InteropView
 import androidx.compose.ui.viewinterop.pointerInteropFilter
+import org.jetbrains.skiko.node.RenderNode
 
 /**
  * Represents a static [CompositionLocal] key for a [ComposeScene] in Jetpack Compose.
@@ -193,6 +194,25 @@ sealed interface ComposeScene : AutoCloseable {
      * Draws the current scene content into [canvas].
      */
     fun draw(canvas: Canvas)
+
+    /**
+     * Whether each of the scene's owners (the main content's, each popup's and dialog's) records what its root draws
+     * into a render node of its own, so that a frame is render nodes throughout ([prepareDraw]) and a host can track
+     * the pixels each frame changes (Skiko's RenderNodeDamageTracker over [prepareDraw]'s nodes). Set it before the
+     * content first draws; scenes that can't keep it false.
+     */
+    @InternalComposeUiApi
+    var recordsRootDrawing: Boolean
+        get() = false
+        set(@Suppress("UNUSED_PARAMETER") value) {}
+
+    /**
+     * With [recordsRootDrawing], settles the next frame (layout, then the display lists of every layer and every
+     * owner's root drawing) and returns the render nodes [draw] then draws, in drawing order and untransformed, as is;
+     * null where the scene can't (then [draw] settles and draws the frame itself).
+     */
+    @InternalComposeUiApi
+    fun prepareDraw(): List<RenderNode>? = null
 
     /**
      * Send pointer event to the content.

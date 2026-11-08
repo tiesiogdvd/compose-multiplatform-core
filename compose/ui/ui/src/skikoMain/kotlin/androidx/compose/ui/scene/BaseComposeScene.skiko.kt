@@ -39,6 +39,7 @@ import androidx.compose.ui.platform.FrameRecomposer
 import androidx.compose.ui.platform.ProvidePlatformCompositionLocals
 import androidx.compose.ui.util.trace
 import kotlin.concurrent.Volatile
+import org.jetbrains.skiko.node.RenderNode
 
 /**
  * BaseComposeScene is an internal abstract class that implements the ComposeScene interface.
@@ -169,9 +170,38 @@ internal abstract class BaseComposeScene(
         }
     }
 
+    private var preparedForDraw = false
+
+    final override var recordsRootDrawing: Boolean = false
+        set(value) {
+            if (field == value || isClosed) return
+            field = value
+            preparedForDraw = false
+            onRecordsRootDrawingChanged(value)
+        }
+
+    override fun prepareDraw(): List<RenderNode>? {
+        if (!recordsRootDrawing || isClosed) return null
+        hasForcedDraw = false
+        val nodes = postponeInvalidation("BaseComposeScene:prepareDraw") {
+            // As draw: the trailing layout pass, and the writes since the last pass made visible.
+            doMeasureAndLayout()
+            Snapshot.notifyObjectsInitialized()
+            doPrepareDraw()
+        }
+        preparedForDraw = nodes != null
+        return nodes
+    }
+
     override fun draw(canvas: Canvas) {
         if (isClosed) return
         hasForcedDraw = false
+        if (preparedForDraw) {
+            // The frame prepareDraw settled: drawn as is.
+            preparedForDraw = false
+            postponeInvalidation("BaseComposeScene:draw") { doDraw(canvas) }
+            return
+        }
 
         postponeInvalidation("BaseComposeScene:draw") {
             // AndroidComposeView.dispatchDraw() begins with measureAndLayout() so layout changes
@@ -305,6 +335,12 @@ internal abstract class BaseComposeScene(
     protected abstract fun doMeasureAndLayout()
 
     protected abstract fun doDraw(canvas: Canvas)
+
+    /** [recordsRootDrawing] turned on or off: the scene's owners record their roots as render nodes, or stop. */
+    protected open fun onRecordsRootDrawingChanged(enabled: Boolean) {}
+
+    /** Prepares what the next [doDraw] draws and returns its render nodes, in drawing order; null where it can't. */
+    protected open fun doPrepareDraw(): List<RenderNode>? = null
 }
 
 internal val BaseComposeScene.semanticsOwnerListener

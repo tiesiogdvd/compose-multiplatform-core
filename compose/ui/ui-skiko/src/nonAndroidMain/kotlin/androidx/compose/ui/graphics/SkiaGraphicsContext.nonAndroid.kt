@@ -33,7 +33,9 @@ class SkiaGraphicsContext(
         PlatformGraphicsRegistry.checkIfRegistered(SkikoGraphics)
     }
 
-    private val renderNodeContext = RenderNodeContext(measureDrawBounds, snapshotCache)
+    /** The context of this graphics context's render nodes, for the nodes a scene records of its own. */
+    @InternalComposeUiApi
+    val renderNodeContext = RenderNodeContext(measureDrawBounds, snapshotCache)
 
     override fun close() {
         super.close()
