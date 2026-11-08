@@ -23,9 +23,24 @@ internal actual class WeakKeysCache<K : Any, V: Any> {
     // TODO Use WeakHashMap once available https://youtrack.jetbrains.com/issue/KT-48075
     private val cache = HashMap<Key<K>, V>()
 
+    /**
+     * The entry count at which the next insertion first drops the entries whose keys were
+     * collected. Every lookup used to sweep the whole map (a weak reference read per entry, on each
+     * text style a paragraph build resolves); sweeping only when the map has doubled since the last
+     * sweep keeps the dead entries within the live ones and the cost amortised per insertion.
+     */
+    private var sweepAt = MinSweepSize
+
     actual inline fun getOrPut(key: K, loader: (K) -> V): V {
-        cache.entries.removeAll { !it.key.isAvailable }
-        return cache.getOrPut(Key(key)) { loader(key) }
+        val weakKey = Key(key)
+        cache[weakKey]?.let { return it }
+        if (cache.size >= sweepAt) {
+            cache.entries.removeAll { !it.key.isAvailable }
+            sweepAt = maxOf(MinSweepSize, cache.size * 2)
+        }
+        val value = loader(key)
+        cache[weakKey] = value
+        return value
     }
 
     @OptIn(ExperimentalNativeApi::class)
@@ -51,3 +66,5 @@ internal actual class WeakKeysCache<K : Any, V: Any> {
         override fun hashCode(): Int = hash
     }
 }
+
+private const val MinSweepSize = 16
