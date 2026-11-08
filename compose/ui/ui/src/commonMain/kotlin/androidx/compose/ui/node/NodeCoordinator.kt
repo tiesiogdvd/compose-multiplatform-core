@@ -506,11 +506,18 @@ internal abstract class NodeCoordinator(override val layoutNode: LayoutNode) :
         if (layer != null) {
             layer.drawLayer(canvas, graphicsLayer)
         } else {
-            val x = position.x.toFloat()
-            val y = position.y.toFloat()
-            canvas.translate(x, y)
-            drawContainedDrawModifiers(canvas, graphicsLayer)
-            canvas.translate(-x, -y)
+            // Most coordinators sit at their wrapper's origin (a size, an offset of zero, a draw
+            // modifier's): no translation there, so no two canvas calls into the platform canvas.
+            val position = position
+            if (position == IntOffset.Zero) {
+                drawContainedDrawModifiers(canvas, graphicsLayer)
+            } else {
+                val x = position.x.toFloat()
+                val y = position.y.toFloat()
+                canvas.translate(x, y)
+                drawContainedDrawModifiers(canvas, graphicsLayer)
+                canvas.translate(-x, -y)
+            }
         }
     }
 
