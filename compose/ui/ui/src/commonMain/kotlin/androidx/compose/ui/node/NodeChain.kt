@@ -226,6 +226,11 @@ internal class NodeChain(val layoutNode: LayoutNode) {
     }
 
     private fun findRootChain(): NodeChain {
+        // An attached node's tree is rooted at its owner's root: no walk up the tree (one parent
+        // and virtual-node hop per level, for every modifier update during recomposition).
+        layoutNode.owner?.let { owner ->
+            return owner.root.nodes
+        }
         var parentLayoutNode = layoutNode.parent
         var childLayoutNode = layoutNode
         while (parentLayoutNode != null) {
