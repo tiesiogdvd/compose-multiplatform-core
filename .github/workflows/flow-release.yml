@@ -1,0 +1,73 @@
+name: Flow release bundle
+
+# Flow's compose-multiplatform-core fork: a tag v<release>-flow.<n> (for example v1.13.0-beta02-flow.3) publishes the
+# patched modules (ui, ui-skiko: the KMP root, desktop and macosArm64 publications, flow-publish-local.sh) at that
+# version, zips them in Maven layout and attaches compose-ui-maven-<version>.zip with SHA256SUMS to a GitHub Release.
+# FlowGraphics' flow.compose takes the bundle through its lock (gradle/compose-lock.toml); every other Compose module and
+# target stays the upstream release. A manual run builds the same bundle as a workflow artifact without releasing.
+
+on:
+  push:
+    tags:
+      - 'v*-flow.*'
+  workflow_dispatch:
+
+permissions:
+  contents: write
+
+jobs:
+  bundle:
+    name: 'ui, ui-skiko: desktop and macOS'
+    runs-on: macos-15
+    timeout-minutes: 120
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-java@v4
+        with:
+          java-version: '21'
+          distribution: 'corretto'
+      - id: version
+        shell: bash
+        run: |
+          if [[ "$GITHUB_REF_TYPE" == "tag" ]]; then
+            echo "version=${GITHUB_REF_NAME#v}" >> "$GITHUB_OUTPUT"
+            echo "release=true" >> "$GITHUB_OUTPUT"
+          else
+            echo "version=1.13.0-beta02-flow.0-ci" >> "$GITHUB_OUTPUT"
+            echo "release=false" >> "$GITHUB_OUTPUT"
+          fi
+      - name: 'Publish ui and ui-skiko to the runner''s Maven local'
+        shell: bash
+        env:
+          FLOW_CMP_JDK: ${{ env.JAVA_HOME }}
+        run: |
+          export ANDROID_SDK_ROOT="${ANDROID_SDK_ROOT:-$ANDROID_HOME}"
+          ./flow-publish-local.sh "${{ steps.version.outputs.version }}"
+      - name: 'Bundle'
+        shell: bash
+        run: |
+          VERSION="${{ steps.version.outputs.version }}"
+          cd ~/.m2/repository
+          FILES=$(ls -d org/jetbrains/compose/ui/*/"$VERSION")
+          [[ -n "$FILES" ]] || { echo "::error::nothing published at $VERSION"; exit 1; }
+          echo "$FILES"
+          zip -qr "$GITHUB_WORKSPACE/compose-ui-maven-$VERSION.zip" $FILES
+          cd "$GITHUB_WORKSPACE"
+          shasum -a 256 "compose-ui-maven-$VERSION.zip" > SHA256SUMS
+          cat SHA256SUMS
+      - uses: actions/upload-artifact@v4
+        with:
+          name: compose-ui-maven
+          path: |
+            compose-ui-maven-*.zip
+            SHA256SUMS
+      - name: 'Release'
+        if: steps.version.outputs.release == 'true'
+        shell: bash
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          VERSION="${{ steps.version.outputs.version }}"
+          gh release create "$GITHUB_REF_NAME" "compose-ui-maven-$VERSION.zip" SHA256SUMS \
+            --repo "$GITHUB_REPOSITORY" --title "$GITHUB_REF_NAME" \
+            --notes "Flow's compose-multiplatform-core ${VERSION}: the patched ui and ui-skiko modules (desktop, macosArm64) in Maven layout. Branch flow/1.13.0-beta02."
