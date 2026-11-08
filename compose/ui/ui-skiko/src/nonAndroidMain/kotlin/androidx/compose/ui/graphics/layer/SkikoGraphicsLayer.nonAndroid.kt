@@ -333,7 +333,9 @@ internal class SkikoGraphicsLayer(
 
     private fun updateLayerProperties() {
         val paint = if (requiresLayer()) {
-            SkPaint().also {
+            // The render node keeps a copy of the paint, so one SkPaint per layer is refilled on every change (an
+            // animated alpha changes it every frame) instead of a new native paint each time.
+            (cachedLayerPaint ?: SkPaint().also { cachedLayerPaint = it }).also {
                 it.setAlphaf(alpha)
                 it.imageFilter = renderEffect?.skiaImageFilter
                 it.colorFilter = colorFilter?.asSkiaColorFilter()
@@ -342,7 +344,6 @@ internal class SkikoGraphicsLayer(
         } else {
             null
         }
-        cachedLayerPaint = paint
         renderNode?.layerPaint = paint
     }
 
