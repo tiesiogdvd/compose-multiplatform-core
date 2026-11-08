@@ -235,9 +235,11 @@ internal class ParagraphLayouter(
                 builder.updateForegroundPaint(paragraph)
                 updateForeground = false
 
-                // Skia caches everything internally, so to actually apply it
-                // markDirty + layout is required.
-                paragraph.markDirty()
+                // Each Skia line caches its text blobs with their paint, so the new paint shows once the lines are
+                // built again. A layout at another width (and the one at [width] below) builds them from the shaped
+                // runs; markDirty would shape the text again (or copy it back from Skia's paragraph cache) for what is
+                // only a paint change.
+                paragraph.layout(otherLayoutWidth(width))
                 layoutRequired = true
             }
             if (!this.width.sameValueAs(width)) {
@@ -257,6 +259,16 @@ internal class ParagraphLayouter(
             paragraph
         }
     }
+}
+
+/**
+ * A width Skia lays out again after a layout at [width]: it floors finite widths, so a whole pixel away (or half of a
+ * width too large for that pixel to show in a Float, such as Constraints.Infinity's), and finite for an infinite one.
+ */
+private fun otherLayoutWidth(width: Float): Float = when {
+    !width.isFinite() -> Float.MAX_VALUE
+    width < 1_000_000f -> width + 1f
+    else -> width / 2f
 }
 
 private fun Shadow?.sameValueAs(other: Shadow?) =
